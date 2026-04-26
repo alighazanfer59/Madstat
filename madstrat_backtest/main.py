@@ -74,8 +74,8 @@ st.divider()
 st.markdown("### Pipeline Status")
 
 from pathlib import Path
-RAW_DIR       = Path(__file__).parent / "madstrat_backtest" / "data" / "raw"
-PROCESSED_DIR = Path(__file__).parent / "madstrat_backtest" / "data" / "processed"
+RAW_DIR       = Path(__file__).parent / "data" / "raw"
+PROCESSED_DIR = Path(__file__).parent / "data" / "processed"
 
 raw_files       = list(RAW_DIR.glob("*.csv"))
 processed_files = list(PROCESSED_DIR.glob("*.csv"))

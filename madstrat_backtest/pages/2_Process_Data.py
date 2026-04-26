@@ -55,11 +55,15 @@ st.divider()
 # ── Check raw files exist ─────────────────────────────────────────────────────
 raw_files = sorted(RAW_DATA_DIR.glob("*.csv"))
 
+# Always show the resolved path so path issues are immediately visible
+st.caption(f"📁 Looking in: `{RAW_DATA_DIR}`")
+
 if not raw_files:
     st.warning(
         "No raw CSV files found in `data/raw/`. "
         "Go to **📥 Load Data** first to fetch some data."
     )
+    st.info(f"Expected path: `{RAW_DATA_DIR}` — verify this matches where your CSV files are.")
     st.stop()
 
 # ── File selection + settings ─────────────────────────────────────────────────

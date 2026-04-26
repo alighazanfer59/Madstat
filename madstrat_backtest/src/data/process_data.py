@@ -30,9 +30,9 @@ from indicators.levels import PriceLevelsCalculator
 log = logging.getLogger(__name__)
 
 # ── Directory constants ───────────────────────────────────────────────────────
-_SRC_DIR       = Path(__file__).resolve().parents[1]   # .../src/
-RAW_DATA_DIR   = _SRC_DIR.parents[1] / "data" / "raw"
-PROCESSED_DIR  = _SRC_DIR.parents[1] / "data" / "processed"
+_PROJECT_ROOT  = Path(__file__).resolve().parents[2]  # madstrat_backtest/
+RAW_DATA_DIR   = _PROJECT_ROOT / "data" / "raw"
+PROCESSED_DIR  = _PROJECT_ROOT / "data" / "processed"
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════

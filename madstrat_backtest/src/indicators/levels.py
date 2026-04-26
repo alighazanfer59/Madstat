@@ -32,9 +32,9 @@ class PriceLevelsCalculator:
             # For intraday data, calculate previous day's high and low
             # Group by date and get max high and min low
             daily_stats = df.groupby(df['Date'].dt.date).agg({
-                'High': 'max',
-                'Low': 'min'
-            }).rename(columns={'High': 'Daily_High', 'Low': 'Daily_Low'})
+                'high': 'max',
+                'low': 'min'
+            }).rename(columns={'high': 'Daily_High', 'low': 'Daily_Low'})
             
             # Merge with original dataframe
             df = df.merge(daily_stats, left_on=df['Date'].dt.date, right_index=True)
@@ -80,8 +80,8 @@ class PriceLevelsCalculator:
         df = df.copy()
         
         # Calculate rolling high and low for the specified window
-        df['PWH'] = df['High'].rolling(window=window, min_periods=1).max()
-        df['PWL'] = df['Low'].rolling(window=window, min_periods=1).min()
+        df['PWH'] = df['high'].rolling(window=window, min_periods=1).max()
+        df['PWL'] = df['low'].rolling(window=window, min_periods=1).min()
         
         return df
     
