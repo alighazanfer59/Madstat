@@ -1,0 +1,7 @@
+streamlit>=1.32.0
+pandas>=2.0.0
+numpy>=1.26.0
+yfinance>=0.2.40
+matplotlib>=3.8.0
+# TradingView — install separately:
+# pip install git+https://github.com/rongardF/tvdatafeed.git
