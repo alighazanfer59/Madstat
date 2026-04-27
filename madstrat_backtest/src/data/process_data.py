@@ -1,38 +1,43 @@
 """
 src/data/process_data.py
 ------------------------
-Loads a raw OHLCV CSV from data/raw/, calculates all EMAs, SMAs and
-daily/weekly price levels, then saves the enriched DataFrame to data/processed/.
+Standalone data processor for Madstrat 2.0.
 
-Column contract
----------------
-Our fetcher saves lowercase columns: open, high, low, close, volume.
-The EMA_SMA_Calculator and PriceLevelsCalculator in the indicators folder
-use Title-case columns (Open, High, Low, Close).  This module normalises
-to Title-case before calling those helpers and converts back to lowercase
-before saving — so the processed files stay consistent with the rest of
-the pipeline.
+Loads a raw OHLCV CSV from data/raw/, adds all required indicators
+and price levels, then saves the enriched file to data/processed/.
+
+No external indicator imports — all calculations are self-contained.
+
+Indicators added
+----------------
+EMAs  : EMA_9, EMA_18, EMA_50   (on close price)
+SMA   : SMA_50                   (on close price)
+
+Price levels added
+------------------
+PDH    Previous Day High
+PDL    Previous Day Low
+PD_EQ  Previous Day Equilibrium  = (PDH + PDL) / 2
+PWH    Previous Week High
+PWL    Previous Week Low
+PW_EQ  Previous Week Equilibrium = (PWH + PWL) / 2
+WH     Current Week High         (running high since Monday open)
+WL     Current Week Low          (running low since Monday open)
 """
 
 import logging
-import sys
 from pathlib import Path
-from typing import Dict, List, Union
 
 import pandas as pd
-
-# ── Make src/ importable regardless of working directory ─────────────────────
-sys.path.append(str(Path(__file__).resolve().parents[1]))   # adds .../src/
-
-from indicators.ema    import EMA_SMA_Calculator
-from indicators.levels import PriceLevelsCalculator
+import numpy as np
 
 log = logging.getLogger(__name__)
 
 # ── Directory constants ───────────────────────────────────────────────────────
-_PROJECT_ROOT  = Path(__file__).resolve().parents[2]  # madstrat_backtest/
-RAW_DATA_DIR   = _PROJECT_ROOT / "data" / "raw"
-PROCESSED_DIR  = _PROJECT_ROOT / "data" / "processed"
+# process_data.py → src/data/ → src/ → madstrat_backtest/
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+RAW_DATA_DIR  = _PROJECT_ROOT / "data" / "raw"
+PROCESSED_DIR = _PROJECT_ROOT / "data" / "processed"
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════
@@ -41,57 +46,42 @@ PROCESSED_DIR  = _PROJECT_ROOT / "data" / "processed"
 
 class DataProcessor:
     """
-    Enriches a raw OHLCV DataFrame with EMAs, SMAs and key price levels.
+    Loads a raw OHLCV CSV and enriches it with EMAs, SMAs and
+    daily/weekly price levels required by the Madstrat strategy.
 
-    Default indicator set (mirrors Madstrat manual requirements):
-        EMAs : 9, 18, 50
-        SMAs : 50
-        Levels : PDH, PDL, PD-EQ, PWH, PWL (rolling 5-day window)
+    All calculations are self-contained — no external indicator modules needed.
 
     Usage
     -----
     processor = DataProcessor()
-
-    # Process one file and save
     df = processor.process_file("EURUSD_15m_2024-01-01_2024-06-30_yfinance.csv")
-
-    # Process all raw files at once
-    results = processor.process_all()
     """
 
-    def __init__(
-        self,
-        ema_periods: List[int] = None,
-        sma_periods: List[int] = None,
-        pwh_window:  int       = 5,
-    ):
-        self.ema_periods = ema_periods or [9, 18, 50]
-        self.sma_periods = sma_periods or [50]
-        self.pwh_window  = pwh_window
-
+    def __init__(self):
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def process_file(
         self,
-        filename: Union[str, Path],
-        output_filename: Union[str, Path] = None,
+        filename: str,
+        output_filename: str = None,
     ) -> pd.DataFrame:
         """
-        Load one raw CSV, add all indicators, save to data/processed/.
+        Load one raw CSV, add all indicators and levels, save to data/processed/.
 
         Parameters
         ----------
-        filename : str | Path
-            Filename only (looked up in data/raw/) OR a full path.
-        output_filename : str | Path, optional
-            Custom output filename in data/processed/.
-            Defaults to <original_stem>_processed.csv
+        filename : str
+            Filename in data/raw/ (e.g. EURUSD_15m_2024-01-01_2024-06-30_yfinance.csv)
+            or a full absolute path.
+        output_filename : str, optional
+            Output filename in data/processed/.
+            Defaults to <stem>_processed.csv
 
         Returns
         -------
-        pd.DataFrame  — fully enriched DataFrame
+        pd.DataFrame  fully enriched DataFrame
         """
         input_path  = self._resolve_input(filename)
         output_path = self._resolve_output(input_path, output_filename)
@@ -99,151 +89,185 @@ class DataProcessor:
         log.info(f"Processing: {input_path.name}")
 
         df = self._load(input_path)
-        df = self._add_emas_smas(df)
-        df = self._add_price_levels(df)
+        df = self._add_ema_sma(df)
+        df = self._add_daily_levels(df)
+        df = self._add_weekly_levels(df)
 
         df.to_csv(output_path)
-        log.info(
-            f"Saved → {output_path.name}  "
-            f"({len(df)} rows × {len(df.columns)} columns)"
-        )
+        log.info(f"Saved → {output_path.name}  ({len(df)} rows × {len(df.columns)} columns)")
 
         return df
 
-    def process_all(self) -> Dict[str, pd.DataFrame]:
-        """
-        Process every CSV in data/raw/ and save each to data/processed/.
-
-        Returns
-        -------
-        dict  {filename: processed_df}
-        """
+    def process_all(self) -> dict:
+        """Process every CSV in data/raw/ and save each to data/processed/."""
         raw_files = sorted(RAW_DATA_DIR.glob("*.csv"))
         if not raw_files:
             log.warning(f"No CSV files found in {RAW_DATA_DIR}")
             return {}
 
-        log.info(f"Found {len(raw_files)} file(s) to process.")
         results = {}
-
         for path in raw_files:
             try:
                 results[path.name] = self.process_file(path)
             except Exception as exc:
-                log.error(f"Failed to process {path.name}: {exc}", exc_info=True)
-
+                log.error(f"Failed: {path.name} — {exc}", exc_info=True)
         return results
 
-    # ── Loading ───────────────────────────────────────────────────────────────
+    # ── Step 1: Load ──────────────────────────────────────────────────────────
 
     def _load(self, path: Path) -> pd.DataFrame:
-        """Read CSV, set DatetimeIndex, normalise columns to Title-case."""
+        """Read CSV, set DatetimeIndex, enforce lowercase column names."""
         df = pd.read_csv(path, index_col=0, parse_dates=True)
 
-        # Ensure the index is a proper DatetimeIndex
         if not isinstance(df.index, pd.DatetimeIndex):
             raise ValueError(
-                f"{path.name}: index is not a DatetimeIndex after parsing. "
-                f"Got {type(df.index).__name__}. Check the raw file."
+                f"{path.name}: could not parse index as DatetimeIndex. "
+                f"Got {type(df.index).__name__}."
             )
 
-        # Normalise column names to Title-case so the indicator helpers
-        # (which expect 'High', 'Low', 'Close', etc.) work without changes.
-        df = self._to_titlecase(df)
+        # Normalise column names to lowercase
+        df.columns = [c.lower() for c in df.columns]
 
-        log.info(f"Loaded {len(df)} rows | columns: {list(df.columns)}")
+        # Confirm required columns are present
+        required = ["open", "high", "low", "close"]
+        missing  = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(f"{path.name}: missing columns {missing}. Got: {list(df.columns)}")
+
+        df = df.sort_index()
+        log.info(f"Loaded {len(df)} rows | {df.index[0]} → {df.index[-1]}")
         return df
 
-    # ── Indicators ────────────────────────────────────────────────────────────
+    # ── Step 2: EMAs and SMA ──────────────────────────────────────────────────
 
-    def _add_emas_smas(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add EMA_{period} and SMA_{period} columns via EMA_SMA_Calculator."""
+    def _add_ema_sma(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add EMA_9, EMA_18, EMA_50 and SMA_50 columns calculated on close price.
+        Uses pandas ewm() for EMAs and rolling() for SMA.
+        """
+        close = df["close"]
 
-        # EMAs
-        df = EMA_SMA_Calculator.calculate_multiple_emas(
-            df, price_col="Close", periods=self.ema_periods
-        )
-        log.info(f"Added EMAs: {['EMA_' + str(p) for p in self.ema_periods]}")
+        df["EMA_9"]  = close.ewm(span=9,  adjust=False).mean()
+        df["EMA_18"] = close.ewm(span=18, adjust=False).mean()
+        df["EMA_50"] = close.ewm(span=50, adjust=False).mean()
+        df["SMA_50"] = close.rolling(window=50).mean()
 
-        # SMAs
-        df = EMA_SMA_Calculator.calculate_multiple_smas(
-            df, price_col="Close", periods=self.sma_periods
-        )
-        log.info(f"Added SMAs: {['SMA_' + str(p) for p in self.sma_periods]}")
-
+        log.info("Added: EMA_9, EMA_18, EMA_50, SMA_50")
         return df
 
-    def _add_price_levels(self, df: pd.DataFrame) -> pd.DataFrame:
+    # ── Step 3: Daily levels ──────────────────────────────────────────────────
+
+    def _add_daily_levels(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Add PDH, PDL, PD-EQ, PWH, PWL columns via PriceLevelsCalculator.
+        Add PDH, PDL, PD_EQ — all based on the PREVIOUS calendar day's range.
 
-        levels.py has two code paths:
-          - timeframe='1D'   → uses df['High'].shift(1) directly (works fine)
-          - intraday         → originally used df['Date'] column, but our data
-                               has a DatetimeIndex.  We inject a 'Date' column
-                               temporarily so the existing helper works unchanged.
+        Method
+        ------
+        1. Build a daily OHLC summary from the base data (works for any timeframe).
+        2. Shift it by 1 day to get "previous day" values.
+        3. Forward-fill onto every intraday bar within that day.
         """
-        # Detect if this is daily data (only one bar per calendar date)
-        is_daily = df.index.normalize().nunique() == len(df)
+        # ── Daily OHLC from the raw bars ──────────────────────────────────────
+        daily = (
+            df["high"].resample("1D").max()
+            .to_frame("daily_high")
+            .join(df["low"].resample("1D").min().rename("daily_low"))
+            .dropna()
+        )
 
-        if is_daily:
-            df = PriceLevelsCalculator.calculate_all_levels(
-                df, pwh_window=self.pwh_window
-            )
-        else:
-            # Intraday: inject a 'Date' column the helper expects, then clean up
-            df = df.copy()
-            df["Date"] = df.index
-            df = PriceLevelsCalculator.calculate_all_levels(
-                df, pwh_window=self.pwh_window
-            )
-            if "Date" in df.columns:
-                df.drop(columns=["Date"], inplace=True)
+        # Previous day values (shift by 1 day)
+        daily["PDH"]   = daily["daily_high"].shift(1)
+        daily["PDL"]   = daily["daily_low"].shift(1)
+        daily["PD_EQ"] = (daily["PDH"] + daily["PDL"]) / 2
 
-        log.info("Added price levels: PDH, PDL, PD-EQ, PWH, PWL")
+        # Keep only the level columns
+        daily = daily[["PDH", "PDL", "PD_EQ"]]
+
+        # Forward-fill onto every intraday bar: reindex to the original index
+        # then ffill so all bars within a day carry the same prior-day levels
+        daily_reindexed = daily.reindex(df.index, method="ffill")
+
+        df["PDH"]   = daily_reindexed["PDH"]
+        df["PDL"]   = daily_reindexed["PDL"]
+        df["PD_EQ"] = daily_reindexed["PD_EQ"]
+
+        log.info("Added: PDH, PDL, PD_EQ")
+        return df
+
+    # ── Step 4: Weekly levels ─────────────────────────────────────────────────
+
+    def _add_weekly_levels(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add PWH, PWL, PW_EQ, WH, WL.
+
+        PWH / PWL / PW_EQ — PREVIOUS week's high, low and midpoint.
+            Built from weekly OHLC resampled to week-start (Monday),
+            then shifted by 1 week and forward-filled onto intraday bars.
+
+        WH / WL — CURRENT (running) week high and low.
+            At each bar: the highest high / lowest low since Monday open
+            of the current week.
+        """
+        # ── Previous week levels ──────────────────────────────────────────────
+        weekly = (
+            df["high"].resample("W-MON", label="left", closed="left").max()
+            .to_frame("weekly_high")
+            .join(
+                df["low"].resample("W-MON", label="left", closed="left")
+                .min()
+                .rename("weekly_low")
+            )
+            .dropna()
+        )
+
+        weekly["PWH"]   = weekly["weekly_high"].shift(1)
+        weekly["PWL"]   = weekly["weekly_low"].shift(1)
+        weekly["PW_EQ"] = (weekly["PWH"] + weekly["PWL"]) / 2
+
+        weekly = weekly[["PWH", "PWL", "PW_EQ"]]
+
+        weekly_reindexed = weekly.reindex(df.index, method="ffill")
+        df["PWH"]   = weekly_reindexed["PWH"]
+        df["PWL"]   = weekly_reindexed["PWL"]
+        df["PW_EQ"] = weekly_reindexed["PW_EQ"]
+
+        log.info("Added: PWH, PWL, PW_EQ")
+
+        # ── Current week running high / low ───────────────────────────────────
+        # dayofweek: Monday=0, Sunday=6
+        # We group by ISO year+week so the window resets every Monday.
+        iso_week = df.index.to_series().dt.isocalendar().week
+        iso_year = df.index.to_series().dt.isocalendar().year
+        week_group = iso_year.astype(str) + "_" + iso_week.astype(str)
+
+        df["WH"] = df.groupby(week_group)["high"].cummax()
+        df["WL"] = df.groupby(week_group)["low"].cummin()
+
+        log.info("Added: WH, WL")
         return df
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _to_titlecase(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Rename lowercase OHLCV columns to Title-case.
-        e.g. open → Open, high → High, close → Close, volume → Volume
-        Leaves any already-correct or unrecognised columns untouched.
-        """
-        rename_map = {
-            "open":   "Open",
-            "high":   "High",
-            "low":    "Low",
-            "close":  "Close",
-            "volume": "Volume",
-        }
-        return df.rename(columns={k: v for k, v in rename_map.items()
-                                   if k in df.columns})
-
-    @staticmethod
-    def _resolve_input(filename: Union[str, Path]) -> Path:
+    def _resolve_input(filename) -> Path:
         path = Path(filename)
+        # If it's already an absolute or existing path, use it directly
         if path.is_absolute() or path.exists():
             if not path.exists():
                 raise FileNotFoundError(f"File not found: {path}")
             return path
-        # Treat as filename relative to data/raw/
+        # Otherwise look in data/raw/
         full = RAW_DATA_DIR / path.name
         if not full.exists():
+            available = "\n".join(f"  {f.name}" for f in RAW_DATA_DIR.glob("*.csv"))
             raise FileNotFoundError(
-                f"'{path.name}' not found in data/raw/ ({RAW_DATA_DIR}). "
-                f"Available files:\n"
-                + "\n".join(f"  {f.name}" for f in RAW_DATA_DIR.glob("*.csv"))
+                f"'{path.name}' not found in data/raw/.\n"
+                f"Available files:\n{available or '  (none)'}"
             )
         return full
 
     @staticmethod
-    def _resolve_output(
-        input_path: Path,
-        output_filename: Union[str, Path, None],
-    ) -> Path:
+    def _resolve_output(input_path: Path, output_filename) -> Path:
         if output_filename:
             p = Path(output_filename)
             return p if p.is_absolute() else PROCESSED_DIR / p.name
@@ -251,7 +275,7 @@ class DataProcessor:
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  CLI entry point  — python process_data.py [filename]
+# ║  CLI  —  python process_data.py [filename]
 # ╚══════════════════════════════════════════════════════════════════════════════
 
 def main():
@@ -263,37 +287,15 @@ def main():
     )
 
     parser = argparse.ArgumentParser(
-        description="Process a raw Madstrat CSV — adds EMAs, SMAs and price levels."
+        description="Madstrat 2.0 — process a raw CSV with EMAs and price levels."
     )
     parser.add_argument(
-        "filename",
-        nargs="?",
-        default=None,
-        help=(
-            "CSV filename in data/raw/ (e.g. EURUSD_15m_2024-01-01_2024-06-30_yfinance.csv) "
-            "or a full path. Omit to process ALL files in data/raw/."
-        ),
+        "filename", nargs="?", default=None,
+        help="Filename in data/raw/ or full path. Omit to process ALL files."
     )
-    parser.add_argument(
-        "--ema", nargs="+", type=int, default=[9, 18, 50],
-        help="EMA periods (default: 9 18 50)"
-    )
-    parser.add_argument(
-        "--sma", nargs="+", type=int, default=[50],
-        help="SMA periods (default: 50)"
-    )
-    parser.add_argument(
-        "--pwh-window", type=int, default=5,
-        help="Rolling window for PWH/PWL in days (default: 5)"
-    )
-
     args = parser.parse_args()
 
-    processor = DataProcessor(
-        ema_periods=args.ema,
-        sma_periods=args.sma,
-        pwh_window=args.pwh_window,
-    )
+    processor = DataProcessor()
 
     if args.filename:
         df = processor.process_file(args.filename)

@@ -87,26 +87,14 @@ with col_left:
         st.dataframe(preview_df, use_container_width=True)
 
 with col_right:
-    st.markdown("#### 2. Indicator Settings")
-
-    ema_input = st.text_input(
-        "EMA periods (comma-separated)",
-        value="9, 18, 50",
-        help="Must include 9, 18, 50 for full Madstrat signal generation."
-    )
-
-    sma_input = st.text_input(
-        "SMA periods (comma-separated)",
-        value="50",
-        help="50 SMA is required for M3 Equilibrium entry detection."
-    )
-
-    pwh_window = st.slider(
-        "PWH / PWL rolling window (days)",
-        min_value=2,
-        max_value=10,
-        value=5,
-        help="Number of days used to calculate Previous Week High/Low."
+    st.markdown("#### 2. Indicators Applied")
+    st.info(
+        "The following are applied automatically:\n\n"
+        "- **EMA 9, 18, 50** on close price\n"
+        "- **SMA 50** on close price\n"
+        "- **PDH, PDL, PD\_EQ** — previous day levels\n"
+        "- **PWH, PWL, PW\_EQ** — previous week levels\n"
+        "- **WH, WL** — current week running high/low"
     )
 
     st.markdown("#### 3. Output File")
@@ -116,28 +104,6 @@ with col_right:
         placeholder="Leave blank to auto-name as <input>_processed.csv",
     )
 
-# ── Parse EMA/SMA inputs ──────────────────────────────────────────────────────
-def parse_periods(raw: str) -> list[int]:
-    try:
-        return sorted(set(int(x.strip()) for x in raw.split(",") if x.strip()))
-    except ValueError:
-        return []
-
-ema_periods = parse_periods(ema_input)
-sma_periods = parse_periods(sma_input)
-
-# Validation warnings
-if not ema_periods:
-    st.error("EMA periods must be a comma-separated list of integers e.g. `9, 18, 50`")
-    st.stop()
-
-missing_emas = [p for p in [9, 18, 50] if p not in ema_periods]
-if missing_emas:
-    st.warning(
-        f"⚠️ EMA periods {missing_emas} are missing. "
-        f"Madstrat signals require EMA 9, 18 and 50."
-    )
-
 st.divider()
 
 # ── Process button ────────────────────────────────────────────────────────────
@@ -145,11 +111,7 @@ if st.button("⚙️ Process Selected File", use_container_width=True, type="pri
 
     with st.spinner(f"Processing {selected_file}..."):
         try:
-            processor = DataProcessor(
-                ema_periods=ema_periods,
-                sma_periods=sma_periods,
-                pwh_window=pwh_window,
-            )
+            processor = DataProcessor()
 
             output_name = custom_output.strip() or None
             df = processor.process_file(
@@ -177,10 +139,10 @@ if "processed_df" in st.session_state:
     st.markdown("### Results")
 
     # ── Column summary ────────────────────────────────────────────────────────
-    ohlcv_cols     = ["Open", "High", "Low", "Close", "Volume"]
+    ohlcv_cols     = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
     ema_cols       = [c for c in df.columns if c.startswith("EMA_")]
     sma_cols       = [c for c in df.columns if c.startswith("SMA_")]
-    level_cols     = [c for c in df.columns if c in ["PDH","PDL","PD-EQ","PWH","PWL"]]
+    level_cols     = [c for c in df.columns if c in ["PDH","PDL","PD_EQ","PWH","PWL","PW_EQ","WH","WL"]]
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total rows",   len(df))
@@ -228,8 +190,8 @@ if "processed_df" in st.session_state:
 
         # Close + EMAs/SMAs
         ax = axes[0]
-        ax.plot(sample.index, sample["Close"],
-                color="#263238", linewidth=1.0, label="Close", zorder=5)
+        ax.plot(sample.index, sample["close"],
+                color="#263238", linewidth=1.0, label="close", zorder=5)
 
         colors = ["#FF5722", "#2196F3", "#4CAF50", "#FF9800", "#9C27B0"]
         for col, color in zip(ema_cols, colors):
@@ -246,15 +208,18 @@ if "processed_df" in st.session_state:
 
         # Price levels
         ax2 = axes[1]
-        ax2.plot(sample.index, sample["Close"],
+        ax2.plot(sample.index, sample["close"],
                  color="#263238", linewidth=0.8, alpha=0.4)
 
         level_styles = {
             "PDH":   ("#E53935", "-"),
             "PDL":   ("#43A047", "-"),
-            "PD-EQ": ("#FB8C00", "--"),
+            "PD_EQ": ("#FB8C00", "--"),
             "PWH":   ("#D81B60", ":"),
             "PWL":   ("#00897B", ":"),
+            "PW_EQ": ("#7B1FA2", ":"),
+            "WH":    ("#FF6F00", "-"),
+            "WL":    ("#1565C0", "-"),
         }
         for col, (color, ls) in level_styles.items():
             if col in sample.columns:
