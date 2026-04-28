@@ -92,8 +92,8 @@ with col_right:
         "The following are applied automatically:\n\n"
         "- **EMA 9, 18, 50** on close price\n"
         "- **SMA 50** on close price\n"
-        "- **PDH, PDL, PD\_EQ** — previous day levels\n"
-        "- **PWH, PWL, PW\_EQ** — previous week levels\n"
+        "- **PDH, PDL, PD_EQ** — previous day levels\n"
+        "- **PWH, PWL, PW_EQ** — previous week levels\n"
         "- **WH, WL** — current week running high/low"
     )
 
@@ -143,22 +143,24 @@ if "processed_df" in st.session_state:
     ema_cols       = [c for c in df.columns if c.startswith("EMA_")]
     sma_cols       = [c for c in df.columns if c.startswith("SMA_")]
     level_cols     = [c for c in df.columns if c in ["PDH","PDL","PD_EQ","PWH","PWL","PW_EQ","WH","WL"]]
+    day_cols       = [c for c in df.columns if c in ["GD", "RD", "GSD", "RSD"]]
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total rows",   len(df))
-    m2.metric("EMAs added",   len(ema_cols))
-    m3.metric("SMAs added",   len(sma_cols))
-    m4.metric("Price levels", len(level_cols))
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Total rows",    len(df))
+    m2.metric("EMAs added",    len(ema_cols))
+    m3.metric("SMAs added",    len(sma_cols))
+    m4.metric("Price levels",  len(level_cols))
+    m5.metric("Day classif.",  len(day_cols))
 
-    # ── Tabs: data / indicators / levels / chart ──────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Raw Data", "📊 EMAs & SMAs", "🎯 Price Levels", "📈 Chart"])
+    # ── Tabs: data / indicators / levels / day classification / chart ─────────
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Raw Data", "📊 EMAs & SMAs", "🎯 Price Levels", "📅 Day Classification", "📈 Chart"])
 
     with tab1:
-        st.dataframe(df[ohlcv_cols].head(50), use_container_width=True)
+        st.dataframe(df[ohlcv_cols].tail(50), use_container_width=True)
 
     with tab2:
         if ema_cols or sma_cols:
-            st.dataframe(df[ema_cols + sma_cols].head(50), use_container_width=True)
+            st.dataframe(df[ema_cols + sma_cols].tail(50), use_container_width=True)
             st.markdown("**NaN counts (warm-up period):**")
             nan_df = df[ema_cols + sma_cols].isnull().sum().rename("NaN count").to_frame()
             nan_df["NaN %"] = (nan_df["NaN count"] / len(df) * 100).round(2)
@@ -168,7 +170,7 @@ if "processed_df" in st.session_state:
 
     with tab3:
         if level_cols:
-            st.dataframe(df[level_cols].head(50), use_container_width=True)
+            st.dataframe(df[level_cols].tail(50), use_container_width=True)
 
             # NaN breakdown for levels
             level_nan = df[level_cols].isnull().sum().rename("NaN count").to_frame()
@@ -179,6 +181,33 @@ if "processed_df" in st.session_state:
             st.info("No price level columns found.")
 
     with tab4:
+        if day_cols:
+            # ── Summary counts ────────────────────────────────────────────────
+            if "day_type" in df.columns:
+                day_type_counts = (
+                    df.drop_duplicates(subset=[df.index.normalize().name if df.index.name else df.index.to_series().dt.normalize().name])
+                    if False  # keep all rows, count by unique days below
+                    else df.groupby(df.index.normalize())["day_type"].last()
+                    .value_counts()
+                    .reset_index()
+                    .rename(columns={"day_type": "Day Type", "count": "Count"})
+                )
+                st.markdown("**Day type distribution (unique trading days):**")
+                st.dataframe(day_type_counts, use_container_width=True)
+
+            st.markdown("**Raw classification columns (first 50 rows):**")
+            st.dataframe(df[day_cols].tail(50), use_container_width=True)
+
+            # NaN summary
+            nan_day = df[day_cols].isnull().sum().rename("NaN count").to_frame()
+            nan_day["NaN %"] = (nan_day["NaN count"] / len(df) * 100).round(2)
+            if nan_day["NaN count"].sum() > 0:
+                st.markdown("**NaN counts:**")
+                st.dataframe(nan_day[nan_day["NaN count"] > 0], use_container_width=True)
+        else:
+            st.info("No day classification columns found.")
+
+    with tab5:
         # Limit sample to keep chart fast
         sample_size = min(len(df), 500)
         sample = df.iloc[:sample_size]

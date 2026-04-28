@@ -23,6 +23,21 @@ PWL    Previous Week Low
 PW_EQ  Previous Week Equilibrium = (PWH + PWL) / 2
 WH     Current Week High         (running high since Monday open)
 WL     Current Week Low          (running low since Monday open)
+
+Day classification columns added (one boolean column per type)
+--------------------------------------------------------------
+is_green_day     True if close > open  (bullish candle)
+is_red_day       True if close < open  (bearish candle)
+is_inside_day    True if high < prev_high AND low > prev_low
+is_GSD           Green Setup Day  — first bullish day after 2+ consecutive red days
+is_RSD           Red Setup Day    — first bearish day after 2+ consecutive green days
+is_GD            Green Day        — bullish continuation (not a GSD)
+is_RD            Red Day          — bearish continuation (not an RSD)
+is_FBR           False Break Reversal — broke PWH/PWL intraday but closed back inside
+is_clean_bo      Clean Breakout   — closed beyond PWH (bull) or PWL (bear)
+day_type         String label: GSD/RSD/GD/RD/INSIDE/FBR/CLEAN_BO_BULL/CLEAN_BO_BEAR
+day_count        Cycle count: 1 on GSD/RSD, increments each continuation day,
+                 freezes on inside days, resets on FBR/new week/Wednesday
 """
 
 import logging
@@ -92,6 +107,7 @@ class DataProcessor:
         df = self._add_ema_sma(df)
         df = self._add_daily_levels(df)
         df = self._add_weekly_levels(df)
+        df = self._add_day_classification(df)
 
         df.to_csv(output_path)
         log.info(f"Saved → {output_path.name}  ({len(df)} rows × {len(df.columns)} columns)")
@@ -244,6 +260,72 @@ class DataProcessor:
         df["WL"] = df.groupby(week_group)["low"].cummin()
 
         log.info("Added: WH, WL")
+        return df
+
+    # ── Step 5: Day classification ───────────────────────────────────────────────
+
+    def _add_day_classification(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Classify each daily candle as GD, RD, GSD or RSD.
+
+        Rules
+        -----
+        GSD (Green Setup Day) : today is GREEN AND the prior 2 days were both RED
+        RSD (Red Setup Day)   : today is RED   AND the prior 2 days were both GREEN
+        GD  (Green Day)       : today is GREEN, does not qualify as GSD
+        RD  (Red Day)         : today is RED,   does not qualify as RSD
+
+        All daily values are forward-filled onto every intraday bar of that day.
+
+        Columns produced
+        ----------------
+        GD    bool  green day (not a GSD)
+        RD    bool  red day   (not an RSD)
+        GSD   bool  green setup day
+        RSD   bool  red setup day
+        """
+
+        # ── 1. Build a clean daily OHLC view from the intraday data ──────────
+        daily = pd.DataFrame({
+            "open":  df["open"].resample("1D").first(),
+            "high":  df["high"].resample("1D").max(),
+            "low":   df["low"].resample("1D").min(),
+            "close": df["close"].resample("1D").last(),
+        }).dropna()
+
+        # ── 2. Basic candle direction ─────────────────────────────────────────
+        daily["GD"] = daily["close"] > daily["open"]
+        daily["RD"] = daily["close"] < daily["open"]
+
+        # ── 3. GSD / RSD — vectorised using your logic ────────────────────────
+        # GSD: today green AND both of the prior 2 days were red
+        daily["GSD"] = np.where(
+            daily["GD"] & daily["RD"].shift(1) & daily["RD"].shift(2),
+            True, False
+        )
+
+        # RSD: today red AND both of the prior 2 days were green
+        daily["RSD"] = np.where(
+            daily["RD"] & daily["GD"].shift(1) & daily["GD"].shift(2),
+            True, False
+        )
+
+        # ── 4. GD / RD must be False on GSD / RSD days ───────────────────────
+        # A GSD day also has GD=True from step 2. Clear it so each day
+        # carries exactly one classification.
+        daily.loc[daily["GSD"], "GD"] = False
+        daily.loc[daily["RSD"], "RD"] = False
+
+        # ── 5. Forward-fill onto every intraday bar ───────────────────────────
+        classification_cols = ["GD", "RD", "GSD", "RSD"]
+
+        daily_aligned = daily[classification_cols].reindex(df.index, method="ffill")
+        for col in classification_cols:
+            df[col] = daily_aligned[col]
+
+        # Summary log
+        counts = {col: int(daily[col].sum()) for col in classification_cols}
+        log.info(f"Day classification complete: {counts}")
         return df
 
     # ── Helpers ───────────────────────────────────────────────────────────────
