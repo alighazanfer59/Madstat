@@ -70,24 +70,46 @@ if not raw_files:
 col_left, col_right = st.columns([3, 2])
 
 with col_left:
-    st.markdown("#### 1. Select Raw File")
+    st.markdown("#### 1. Select Intraday File")
 
     file_names    = [f.name for f in raw_files]
     selected_file = st.selectbox(
-        "Raw file",
+        "Intraday file (15m / 30m / 1h)",
         file_names,
         help="Files in data/raw/ — fetched via the Load Data page."
     )
     selected_path = RAW_DATA_DIR / selected_file
 
-    # Quick preview of selected file
     if selected_path.exists():
         preview_df = pd.read_csv(selected_path, index_col=0, parse_dates=True, nrows=5)
-        st.caption(f"Preview (first 5 rows of {selected_file}):")
+        st.caption(f"Preview — {selected_file}:")
         st.dataframe(preview_df, use_container_width=True)
 
+    st.markdown("#### 2. Select Daily File *(recommended)*")
+    st.caption(
+        "Providing a real daily CSV gives more accurate day classifications "
+        "(GSD/RSD/inside_day/FBR) than resampling the intraday data."
+    )
+    daily_options  = ["— None (resample from intraday) —"] + file_names
+    selected_daily = st.selectbox(
+        "Daily file (1d)",
+        daily_options,
+        index=0,
+        help="Select a daily CSV fetched from the same source as the intraday file."
+    )
+    daily_filename = None if selected_daily.startswith("—") else selected_daily
+
+    if daily_filename:
+        daily_path = RAW_DATA_DIR / daily_filename
+        if daily_path.exists():
+            daily_preview = pd.read_csv(daily_path, index_col=0, parse_dates=True, nrows=5)
+            st.caption(f"Preview — {daily_filename}:")
+            st.dataframe(daily_preview, use_container_width=True)
+    else:
+        st.info("No daily file selected — daily candles will be resampled from the intraday file.")
+
 with col_right:
-    st.markdown("#### 2. Indicators Applied")
+    st.markdown("#### 3. Indicators Applied")
     st.info(
         "The following are applied automatically:\n\n"
         "- **EMA 9, 18, 50** on close price\n"
@@ -97,7 +119,7 @@ with col_right:
         "- **WH, WL** — current week running high/low"
     )
 
-    st.markdown("#### 3. Output File")
+    st.markdown("#### 4. Output File")
     custom_output = st.text_input(
         "Output filename (optional)",
         value="",
@@ -116,6 +138,7 @@ if st.button("⚙️ Process Selected File", use_container_width=True, type="pri
             output_name = custom_output.strip() or None
             df = processor.process_file(
                 selected_path,
+                daily_filename=daily_filename,
                 output_filename=output_name,
             )
 
@@ -143,7 +166,11 @@ if "processed_df" in st.session_state:
     ema_cols       = [c for c in df.columns if c.startswith("EMA_")]
     sma_cols       = [c for c in df.columns if c.startswith("SMA_")]
     level_cols     = [c for c in df.columns if c in ["PDH","PDL","PD_EQ","PWH","PWL","PW_EQ","WH","WL"]]
-    day_cols       = [c for c in df.columns if c in ["GD", "RD", "GSD", "RSD"]]
+    day_cols       = [c for c in df.columns if c in [
+        "GD", "RD", "GSD", "RSD", "inside_day",
+        "FBR", "FBR_bull", "FBR_bear",
+        "clean_BO", "clean_BO_bull", "clean_BO_bear",
+    ]]
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total rows",    len(df))
