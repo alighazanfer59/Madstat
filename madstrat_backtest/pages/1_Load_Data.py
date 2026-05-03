@@ -59,14 +59,14 @@ with st.form("fetch_form"):
         instrument = st.selectbox(
             "Instrument",
             ["EURUSD", "GBPUSD", "EURGBP", "XAUUSD"],
-            index=0,
+            index=3,
             help="Madstrat 2.0 is optimised for these pairs only."
         )
 
         timeframes = st.multiselect(
             "Timeframes to fetch",
             ["15m", "30m", "1h", "2h", "4h", "1d"],
-            default=["15m", "1h", "4h"],
+            default=["15m", "1d"],
             help="Select all timeframes you need. 4H is auto-resampled from 1H for yfinance."
         )
 
@@ -84,25 +84,25 @@ with st.form("fetch_form"):
         st.markdown("#### Data Source")
         source = st.radio(
             "Source",
-            ["yfinance", "tradingview"],
+            ["tradingview", "yfinance"],
             horizontal=True,
             help="yfinance: free, no login. TradingView: deeper history, native 4H."
         )
 
     # TradingView credentials (only shown when TV selected)
     tv_user = tv_pass = ""
-    if source == "tradingview":
-        st.divider()
-        st.markdown("#### TradingView Credentials *(optional)*")
-        st.caption(
-            "Leave blank to connect without login. "
-            "Some symbols require an account for full history."
-        )
-        cred_col1, cred_col2 = st.columns(2)
-        with cred_col1:
-            tv_user = st.text_input("Username", type="default")
-        with cred_col2:
-            tv_pass = st.text_input("Password", type="password")
+    # if source == "tradingview":
+    #     st.divider()
+    #     st.markdown("#### TradingView Credentials *(optional)*")
+    #     st.caption(
+    #         "Leave blank to connect without login. "
+    #         "Some symbols require an account for full history."
+    #     )
+    #     cred_col1, cred_col2 = st.columns(2)
+    #     with cred_col1:
+    #         tv_user = st.text_input("Username", type="default")
+    #     with cred_col2:
+    #         tv_pass = st.text_input("Password", type="password")
 
     submitted = st.form_submit_button("🚀 Fetch Data", use_container_width=True)
 
