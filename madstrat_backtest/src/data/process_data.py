@@ -378,17 +378,28 @@ class DataProcessor:
             Bull FBR : daily high > PWH  AND  daily close <= PWH
             Bear FBR : daily low  < PWL  AND  daily close >= PWL
 
-        PWH/PWL come from the intraday df (step 4), sampled at the
-        last bar of each day so they align with the daily candle.
+        PWH/PWL are forward-filled from the intraday df onto the daily index
+        using ffill so each daily bar gets the weekly level in force that day.
 
         Columns: FBR, FBR_bull, FBR_bear
         """
-        d = daily[["high", "low", "close"]].copy()
+        # d = daily[["high", "low", "close"]].copy()
 
-        # Pull PWH/PWL from intraday (last value per day = value in force that day)
-        d["PWH"] = df["PWH"].resample("1D").last()
-        d["PWL"] = df["PWL"].resample("1D").last()
-        d = d.dropna(subset=["PWH", "PWL"])
+        # Forward-fill the intraday PWH/PWL onto the daily index
+        # This avoids the resample mismatch when daily index != intraday buckets
+        daily["PWH"] = df["PWH"].reindex(daily.index, method="ffill")
+        daily["PWL"] = df["PWL"].reindex(daily.index, method="ffill")
+
+        # If exact daily timestamps don't exist in intraday, use nearest prior bar
+        if daily["PWH"].isna().all():
+            daily["PWH"] = df["PWH"].reindex(
+                daily.index, method="ffill", tolerance=pd.Timedelta("1D")
+            )
+            daily["PWL"] = df["PWL"].reindex(
+                daily.index, method="ffill", tolerance=pd.Timedelta("1D")
+            )
+
+        d = daily.dropna(subset=["PWH", "PWL"])
 
         d["FBR_bull"] = (d["high"]  > d["PWH"]) & (d["close"] <= d["PWH"])
         d["FBR_bear"] = (d["low"]   < d["PWL"]) & (d["close"] >= d["PWL"])
@@ -411,10 +422,21 @@ class DataProcessor:
 
         Columns: clean_BO, clean_BO_bull, clean_BO_bear
         """
-        d = daily[["close"]].copy()
-        d["PWH"] = df["PWH"].resample("1D").last()
-        d["PWL"] = df["PWL"].resample("1D").last()
-        d = d.dropna(subset=["PWH", "PWL"])
+        # d = daily[["close"]].copy()
+
+        # Forward-fill the intraday PWH/PWL onto the daily index
+        daily["PWH"] = df["PWH"].reindex(daily.index, method="ffill")
+        daily["PWL"] = df["PWL"].reindex(daily.index, method="ffill")
+
+        if daily["PWH"].isna().all():
+            daily["PWH"] = df["PWH"].reindex(
+                daily.index, method="ffill", tolerance=pd.Timedelta("1D")
+            )
+            daily["PWL"] = df["PWL"].reindex(
+                daily.index, method="ffill", tolerance=pd.Timedelta("1D")
+            )
+
+        d = daily.dropna(subset=["PWH", "PWL"])
 
         d["clean_BO_bull"] = d["close"] > d["PWH"]
         d["clean_BO_bear"] = d["close"] < d["PWL"]

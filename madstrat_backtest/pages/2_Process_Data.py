@@ -90,11 +90,13 @@ with col_left:
         "Providing a real daily CSV gives more accurate day classifications "
         "(GSD/RSD/inside_day/FBR) than resampling the intraday data."
     )
-    daily_options  = ["— None (resample from intraday) —"] + file_names
+    # daily_options  = ["— None (resample from intraday) —"] + file_names
+    daily_options  = ["— None (resample from intraday) —"] + [file for file in file_names if "1d" in file or "daily" in file.lower()]
+
     selected_daily = st.selectbox(
         "Daily file (1d)",
         daily_options,
-        index=0,
+        index=len(daily_options)-1 if len(daily_options) > 0 else 0,  # default to last option (which is the filtered daily files)
         help="Select a daily CSV fetched from the same source as the intraday file."
     )
     daily_filename = None if selected_daily.startswith("—") else selected_daily
